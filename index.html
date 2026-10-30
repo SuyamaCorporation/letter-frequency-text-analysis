@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文字頻度 テキスト 分析 ビジュアル</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+body { background: #0f0f1a; }
+canvas { display: block; }
+textarea { resize: vertical; }
+</style>
+</head>
+<body class="min-h-screen text-white font-sans p-4">
+<div class="max-w-4xl mx-auto">
+  <h1 class="text-2xl font-bold text-center mb-1 text-purple-400">📊 文字頻度 テキスト分析</h1>
+  <p class="text-center text-gray-400 text-sm mb-3">文字の出現頻度をリアルタイム可視化</p>
+
+  <!-- Input -->
+  <div class="bg-gray-800 rounded-xl p-3 mb-3">
+    <div class="flex justify-between items-center mb-2">
+      <label class="text-sm font-bold text-purple-400" for="textInput">テキスト入力</label>
+      <div class="flex gap-2">
+        <button onclick="loadSample()" class="text-xs bg-gray-600 hover:bg-gray-500 px-2 py-1 rounded" aria-label="サンプルテキスト">サンプル</button>
+        <button onclick="clearText()" class="text-xs bg-red-800 hover:bg-red-700 px-2 py-1 rounded" aria-label="クリア">クリア</button>
+      </div>
+    </div>
+    <textarea id="textInput" class="w-full bg-gray-900 text-white rounded-lg p-3 border border-gray-700 text-sm font-mono" rows="4" placeholder="テキストを入力または貼り付けてください..." oninput="analyze()" aria-label="分析するテキスト"></textarea>
+    <div class="flex gap-4 mt-2 text-xs text-gray-400">
+      <span>総文字数: <span id="totalChars" class="text-white font-bold">0</span></span>
+      <span>ユニーク文字: <span id="uniqueChars" class="text-white font-bold">0</span></span>
+      <span>単語数（スペース区切り）: <span id="wordCount" class="text-white font-bold">0</span></span>
+    </div>
+  </div>
+
+  <!-- Tab controls -->
+  <div class="flex gap-1 mb-2">
+    <button onclick="setTab('freq')" id="tabFreq" class="px-3 py-1 rounded-t-lg text-sm font-bold bg-purple-700 text-white" aria-label="文字頻度">文字頻度</button>
+    <button onclick="setTab('zipf')" id="tabZipf" class="px-3 py-1 rounded-t-lg text-sm font-bold bg-gray-700 text-white" aria-label="Zipf分析">Zipf則</button>
+    <button onclick="setTab('bigram')" id="tabBigram" class="px-3 py-1 rounded-t-lg text-sm font-bold bg-gray-700 text-white" aria-label="Bigram分析">Bigram</button>
+    <button onclick="setTab('type')" id="tabType" class="px-3 py-1 rounded-t-lg text-sm font-bold bg-gray-700 text-white" aria-label="字種分布">字種分布</button>
+  </div>
+
+  <!-- Canvas -->
+  <canvas id="canvas" width="800" height="340" class="rounded-b-xl rounded-tr-xl border border-gray-700 w-full mb-3" aria-label="文字頻度グラフ"></canvas>
+
+  <!-- Top chars -->
+  <div class="bg-gray-800 rounded-xl p-3 mb-3">
+    <div class="text-sm font-bold text-purple-400 mb-2">上位文字ランキング</div>
+    <div id="topChars" class="flex flex-wrap gap-2 text-xs"></div>
+  </div>
+
+  <!-- Bigram list -->
+  <div id="bigramSection" class="hidden bg-gray-800 rounded-xl p-3">
+    <div class="text-sm font-bold text-purple-400 mb-2">頻出Bigram（上位10ペア）</div>
+    <div id="bigramList" class="flex flex-wrap gap-2 text-xs"></div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+let currentTab = 'freq';
+let charFreq = {};
+let bigramFreq = {};
+let totalCount = 0;
+
+const CHAR_COLORS = {
+  hiragana: '#a78bfa',
+  katakana: '#60a5fa',
+  kanji: '#f87171',
+  latin: '#4ade80',
+  digit: '#fbbf24',
+  space: '#9ca3af',
+  punct: '#fb923c',
+  other: '#818cf8'
+};
+
+function charType(c){
+  const code = c.codePointAt(0);
+  if(code >= 0x3040 && code <= 0x309F) return 'hiragana';
+  if(code >= 0x30A0 && code <= 0x30FF) return 'katakana';
+  if((code >= 0x4E00 && code <= 0x9FFF)||(code >= 0x3400 && code <= 0x4DBF)) return 'kanji';
+  if((code >= 65 && code <= 90)||(code >= 97 && code <= 122)) return 'latin';
+  if(code >= 48 && code <= 57) return 'digit';
+  if(c === ' ' || c === '\n' || c === '\t') return 'space';
+  if('。、・！？,.!?;:「」『』（）[]{}()'.includes(c)) return 'punct';
+  return 'other';
+}
+
+function analyze(){
+  const text = document.getElementById('textInput').value;
+  charFreq = {};
+  bigramFreq = {};
+  totalCount = 0;
+
+  for(let i=0;i<text.length;i++){
+    const c = text[i];
+    charFreq[c] = (charFreq[c]||0)+1;
+    totalCount++;
+    if(i>0){
+      const bg = text[i-1]+c;
+      bigramFreq[bg] = (bigramFreq[bg]||0)+1;
+    }
+  }
+
+  document.getElementById('totalChars').textContent = totalCount.toLocaleString();
+  document.getElementById('uniqueChars').textContent = Object.keys(charFreq).length;
+  document.getElementById('wordCount').textContent = text.split(/\s+/).filter(w=>w.length>0).length;
+
+  renderCurrentTab();
+  renderTopChars();
+  saveToLS();
+}
+
+function setTab(tab){
+  currentTab = tab;
+  ['freq','zipf','bigram','type'].forEach(t=>{
+    const el = document.getElementById('tab'+t.charAt(0).toUpperCase()+t.slice(1));
+    if(el) el.className='px-3 py-1 rounded-t-lg text-sm font-bold '+(t===tab?'bg-purple-700 text-white':'bg-gray-700 text-white');
+  });
+  document.getElementById('bigramSection').classList.toggle('hidden', tab!=='bigram');
+  renderCurrentTab();
+}
+
+function renderCurrentTab(){
+  switch(currentTab){
+    case 'freq': renderFreqChart(); break;
+    case 'zipf': renderZipfChart(); break;
+    case 'bigram': renderBigramChart(); break;
+    case 'type': renderTypeChart(); break;
+  }
+}
+
+function renderFreqChart(){
+  ctx.fillStyle = '#0f0f1a';
+  ctx.fillRect(0,0,W,H);
+  const sorted = Object.entries(charFreq).sort((a,b)=>b[1]-a[1]).slice(0,20);
+  if(sorted.length===0){ drawEmpty('テキストを入力してください'); return; }
+
+  const pad = {l:40,r:20,t:30,b:50};
+  const chartW = W-pad.l-pad.r, chartH = H-pad.t-pad.b;
+  const barW = Math.floor(chartW / sorted.length) - 2;
+  const maxVal = sorted[0][1];
+
+  ctx.fillStyle='rgba(255,255,255,0.05)';
+  ctx.fillRect(pad.l,pad.t,chartW,chartH);
+
+  // Grid
+  ctx.strokeStyle='rgba(255,255,255,0.08)';
+  ctx.lineWidth=1;
+  for(let i=1;i<=5;i++){
+    const y = pad.t + chartH*(1-i/5);
+    ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(pad.l+chartW,y); ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,0.4)';
+    ctx.font='10px monospace';
+    ctx.textAlign='right';
+    ctx.fillText(Math.round(maxVal*i/5), pad.l-3, y+3);
+  }
+
+  sorted.forEach(([char, count], i)=>{
+    const x = pad.l + i*(barW+2);
+    const bh = (count/maxVal)*chartH;
+    const y = pad.t + chartH - bh;
+    const type = charType(char);
+    const color = CHAR_COLORS[type];
+
+    // Bar gradient
+    const grad = ctx.createLinearGradient(0,y,0,y+bh);
+    grad.addColorStop(0, color);
+    grad.addColorStop(1, color+'44');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, barW, bh);
+
+    // Glow
+    ctx.fillStyle = color+'22';
+    ctx.fillRect(x-1, y-1, barW+2, bh+2);
+
+    // Count label
+    ctx.fillStyle = '#fff';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    if(bh > 15) ctx.fillText(count, x+barW/2, y-3);
+
+    // Char label
+    const displayChar = char === ' ' ? '␣' : char === '\n' ? '↵' : char;
+    ctx.fillStyle = color;
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillText(displayChar, x+barW/2, pad.t+chartH+14);
+
+    // Frequency percent
+    ctx.fillStyle='rgba(255,255,255,0.5)';
+    ctx.font='8px monospace';
+    ctx.fillText((count/totalCount*100).toFixed(1)+'%', x+barW/2, pad.t+chartH+26);
+  });
+
+  // Title
+  ctx.fillStyle='#a78bfa';
+  ctx.font='bold 13px sans-serif';
+  ctx.textAlign='left';
+  ctx.fillText('文字頻度 TOP'+sorted.length, pad.l, 18);
+}
+
+function renderZipfChart(){
+  ctx.fillStyle = '#0f0f1a';
+  ctx.fillRect(0,0,W,H);
+  const sorted = Object.entries(charFreq).sort((a,b)=>b[1]-a[1]);
+  if(sorted.length < 2){ drawEmpty('もっとテキストを入力してください'); return; }
+
+  const pad = {l:55,r:20,t:30,b:40};
+  const chartW = W-pad.l-pad.r, chartH = H-pad.t-pad.b;
+
+  // Log-log plot
+  const maxRank = sorted.length;
+  const maxFreq = sorted[0][1];
+  const minFreq = sorted[sorted.length-1][1]||1;
+
+  ctx.fillStyle='rgba(255,255,255,0.05)';
+  ctx.fillRect(pad.l,pad.t,chartW,chartH);
+
+  // Grid
+  ctx.strokeStyle='rgba(255,255,255,0.08)';
+  ctx.lineWidth=1;
+  for(let i=1;i<=5;i++){
+    const y=pad.t+chartH*i/5;
+    ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+chartW,y);ctx.stroke();
+  }
+
+  // Zipf ideal line (freq ∝ 1/rank)
+  ctx.beginPath();
+  ctx.strokeStyle='rgba(251,191,36,0.5)';
+  ctx.lineWidth=1.5;
+  ctx.setLineDash([5,5]);
+  for(let i=0;i<sorted.length;i++){
+    const idealFreq = sorted[0][1]/Math.max(1,i+1);
+    const lx = pad.l + (Math.log(i+1)/Math.log(maxRank))*chartW;
+    const ly = pad.t + (1-Math.log(idealFreq)/Math.log(maxFreq))*chartH;
+    if(i===0) ctx.moveTo(lx,Math.max(pad.t,ly));
+    else ctx.lineTo(lx,Math.max(pad.t,ly));
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Actual data
+  ctx.beginPath();
+  ctx.strokeStyle='#a78bfa';
+  ctx.lineWidth=2;
+  sorted.forEach(([char,count],i)=>{
+    const lx = pad.l + (Math.log(i+1)/Math.log(maxRank))*chartW;
+    const ly = pad.t + chartH - (Math.log(count)/Math.log(maxFreq))*chartH;
+    if(i===0) ctx.moveTo(lx,ly); else ctx.lineTo(lx,ly);
+    // Dot
+    ctx.fillStyle='#818cf8';
+    ctx.beginPath();
+    ctx.arc(lx,ly,2,0,Math.PI*2);
+    ctx.fill();
+  });
+  ctx.stroke();
+
+  // Axes
+  ctx.fillStyle='rgba(255,255,255,0.6)';
+  ctx.font='10px monospace';
+  ctx.textAlign='right';
+  for(let i=0;i<=4;i++){
+    const rank=Math.round(Math.exp(Math.log(maxRank)*i/4));
+    const x=pad.l+(Math.log(rank)/Math.log(maxRank))*chartW;
+    ctx.fillText(rank, x, pad.t+chartH+14);
+  }
+  ctx.fillStyle='#fbbf24';
+  ctx.font='9px sans-serif';
+  ctx.textAlign='center';
+  ctx.fillText('── Zipf理想', pad.l+chartW*0.7, pad.t+20);
+  ctx.fillStyle='#a78bfa';
+  ctx.fillText('── 実測値', pad.l+chartW*0.7, pad.t+32);
+
+  ctx.fillStyle='#a78bfa';
+  ctx.font='bold 13px sans-serif';
+  ctx.textAlign='left';
+  ctx.fillText('Zipf則（ランク-頻度）対数グラフ', pad.l, 18);
+}
+
+function renderBigramChart(){
+  ctx.fillStyle = '#0f0f1a';
+  ctx.fillRect(0,0,W,H);
+  const sorted = Object.entries(bigramFreq).sort((a,b)=>b[1]-a[1]).slice(0,20);
+  if(sorted.length===0){ drawEmpty('テキストを入力してください'); return; }
+
+  const pad={l:40,r:20,t:30,b:60};
+  const chartW=W-pad.l-pad.r, chartH=H-pad.t-pad.b;
+  const barW=Math.floor(chartW/sorted.length)-2;
+  const maxVal=sorted[0][1];
+
+  sorted.forEach(([bg,count],i)=>{
+    const x=pad.l+i*(barW+2);
+    const bh=(count/maxVal)*chartH;
+    const y=pad.t+chartH-bh;
+    const hue=(i/sorted.length)*180+160;
+    ctx.fillStyle=`hsla(${hue},80%,60%,0.9)`;
+    ctx.fillRect(x,y,barW,bh);
+    ctx.fillStyle='#fff';
+    ctx.font='9px monospace';
+    ctx.textAlign='center';
+    if(bh>15) ctx.fillText(count,x+barW/2,y-3);
+    // bigram chars
+    ctx.fillStyle=`hsl(${hue},80%,70%)`;
+    ctx.font='bold 10px sans-serif';
+    const display=bg.replace('\n','↵').replace(' ','␣');
+    ctx.fillText(display,x+barW/2,pad.t+chartH+14);
+    ctx.fillStyle='rgba(255,255,255,0.5)';
+    ctx.font='7px monospace';
+    ctx.fillText(count,x+barW/2,pad.t+chartH+26);
+  });
+
+  ctx.fillStyle='#60a5fa';
+  ctx.font='bold 13px sans-serif';
+  ctx.textAlign='left';
+  ctx.fillText('頻出Bigram TOP'+sorted.length, pad.l, 18);
+
+  // Update bigram list
+  const bl=document.getElementById('bigramList');
+  bl.innerHTML=sorted.map(([bg,count])=>{
+    const display=bg.replace('\n','↵').replace(' ','␣');
+    return `<span class="bg-gray-700 px-2 py-0.5 rounded font-mono text-blue-300">${display}<span class="text-gray-400 ml-1">${count}</span></span>`;
+  }).join('');
+}
+
+function renderTypeChart(){
+  ctx.fillStyle = '#0f0f1a';
+  ctx.fillRect(0,0,W,H);
+
+  // Count by type
+  const typeCounts = {};
+  for(const [c,n] of Object.entries(charFreq)){
+    const t=charType(c);
+    typeCounts[t]=(typeCounts[t]||0)+n;
+  }
+  if(Object.keys(typeCounts).length===0){ drawEmpty('テキストを入力してください'); return; }
+
+  const typeNames={hiragana:'ひらがな',katakana:'カタカナ',kanji:'漢字',latin:'英字',digit:'数字',space:'空白',punct:'句読点',other:'その他'};
+  const entries=Object.entries(typeCounts).sort((a,b)=>b[1]-a[1]);
+  const total=entries.reduce((s,[,n])=>s+n,0);
+
+  // Donut chart
+  const cx=W*0.35, cy=H/2, r=Math.min(H,W*0.4)*0.4;
+  let angle=-Math.PI/2;
+  entries.forEach(([type,count])=>{
+    const sweep=count/total*Math.PI*2;
+    const color=CHAR_COLORS[type]||'#818cf8';
+    ctx.beginPath();
+    ctx.moveTo(cx,cy);
+    ctx.arc(cx,cy,r,angle,angle+sweep);
+    ctx.closePath();
+    ctx.fillStyle=color;
+    ctx.fill();
+    ctx.strokeStyle='#0f0f1a';
+    ctx.lineWidth=2;
+    ctx.stroke();
+    // Label
+    if(sweep>0.1){
+      const midAngle=angle+sweep/2;
+      const lx=cx+Math.cos(midAngle)*r*0.65;
+      const ly=cy+Math.sin(midAngle)*r*0.65;
+      ctx.fillStyle='#fff';
+      ctx.font='bold 10px sans-serif';
+      ctx.textAlign='center';
+      ctx.fillText((count/total*100).toFixed(0)+'%',lx,ly);
+    }
+    angle+=sweep;
+  });
+  // Donut hole
+  ctx.beginPath();
+  ctx.arc(cx,cy,r*0.5,0,Math.PI*2);
+  ctx.fillStyle='#0f0f1a';
+  ctx.fill();
+  ctx.fillStyle='#fff';
+  ctx.font='bold 14px sans-serif';
+  ctx.textAlign='center';
+  ctx.fillText(total.toLocaleString(),cx,cy-4);
+  ctx.font='10px sans-serif';
+  ctx.fillStyle='#9ca3af';
+  ctx.fillText('文字',cx,cy+12);
+
+  // Legend
+  const legendX=W*0.65, legendY=50;
+  entries.forEach(([type,count],i)=>{
+    const color=CHAR_COLORS[type]||'#818cf8';
+    const y=legendY+i*26;
+    ctx.fillStyle=color;
+    ctx.fillRect(legendX,y,14,14);
+    ctx.fillStyle='#fff';
+    ctx.font='12px sans-serif';
+    ctx.textAlign='left';
+    ctx.fillText(typeNames[type]||type,legendX+18,y+11);
+    ctx.fillStyle='rgba(255,255,255,0.6)';
+    ctx.font='10px monospace';
+    ctx.fillText(`${count}回 (${(count/total*100).toFixed(1)}%)`,legendX+18,y+23);
+  });
+
+  ctx.fillStyle='#f87171';
+  ctx.font='bold 13px sans-serif';
+  ctx.textAlign='left';
+  ctx.fillText('字種分布', 30, 18);
+}
+
+function drawEmpty(msg){
+  ctx.fillStyle='rgba(255,255,255,0.2)';
+  ctx.font='16px sans-serif';
+  ctx.textAlign='center';
+  ctx.fillText(msg, W/2, H/2);
+}
+
+function renderTopChars(){
+  const sorted=Object.entries(charFreq).sort((a,b)=>b[1]-a[1]).slice(0,20);
+  const el=document.getElementById('topChars');
+  el.innerHTML=sorted.map(([c,n])=>{
+    const type=charType(c);
+    const color=CHAR_COLORS[type]||'#818cf8';
+    const display=c===' '?'[スペース]':c==='\n'?'[改行]':c;
+    return `<span class="bg-gray-700 px-2 py-0.5 rounded flex items-center gap-1">
+      <span class="font-mono font-bold" style="color:${color}">${display}</span>
+      <span class="text-gray-400">${n}</span>
+    </span>`;
+  }).join('');
+}
+
+function loadSample(){
+  document.getElementById('textInput').value=`吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。吾輩はここで始めて人間というものを見た。しかもあとで聞くとそれは書生という人間中で一番獰悪な種族であったそうだ。この書生というのは時々我々を捕えて煮て食うという話である。しかし其当時は何という考もなかったから別段恐しいとも思わなかった。ただ彼の掌に載せられてスーと持ち上げられた時何だかフワフワした感じがあったばかりである。`;
+  analyze();
+}
+
+function clearText(){
+  document.getElementById('textInput').value='';
+  charFreq={};bigramFreq={};totalCount=0;
+  document.getElementById('totalChars').textContent='0';
+  document.getElementById('uniqueChars').textContent='0';
+  document.getElementById('wordCount').textContent='0';
+  document.getElementById('topChars').innerHTML='';
+  ctx.fillStyle='#0f0f1a';ctx.fillRect(0,0,W,H);
+  drawEmpty('テキストを入力してください');
+}
+
+function saveToLS(){
+  try{ localStorage.setItem('textAnalysis_input', document.getElementById('textInput').value.slice(0,5000)); }catch(e){}
+}
+function loadFromLS(){
+  try{
+    const t=localStorage.getItem('textAnalysis_input');
+    if(t){ document.getElementById('textInput').value=t; analyze(); }
+  }catch(e){}
+}
+
+// Init
+ctx.fillStyle='#0f0f1a';ctx.fillRect(0,0,W,H);
+drawEmpty('テキストを入力してください');
+loadFromLS();
+</script>
+</body>
+</html>
